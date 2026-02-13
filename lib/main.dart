@@ -2,23 +2,29 @@
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
+import 'package:fl_chart/fl_chart.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'dart:io';
+import 'package:permission_handler/permission_handler.dart';
 
 // Импорты моделей и сервисов
-import 'database/database_helper.dart';
+import 'services/hive_service.dart';
 import 'models/user.dart';
 import 'models/health_record.dart';
 import 'models/journal_entry.dart';
 import 'services/pdf_service.dart';
+import 'services/share_service.dart';
+import 'services/ble_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
   try {
-    // Инициализируем базу данных
-    await DatabaseHelper().database;
-    print('База данных инициализирована');
+    // Инициализируем Hive (сервис HiveService)
+    await HiveService().init();
+    print('Hive инициализирован');
   } catch (e) {
-    print('Ошибка инициализации БД: $e');
+    print('Ошибка инициализации Hive: $e');
   }
   
   runApp(const HealthMonitorApp());
@@ -51,8 +57,8 @@ class AuthScreen extends StatefulWidget {
 }
 
 class _AuthScreenState extends State<AuthScreen> {
-  final _emailController = TextEditingController(text: 'demo@healthmonitor.com');
-  final _passwordController = TextEditingController(text: 'demo123');
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
   bool _isLoading = false;
   String? _errorMessage;
@@ -74,27 +80,6 @@ class _AuthScreenState extends State<AuthScreen> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                // Статус бар
-                Container(
-                  height: 30,
-                  padding: const EdgeInsets.symmetric(horizontal: 15),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        DateFormat('HH:mm').format(DateTime.now()),
-                        style: TextStyle(color: Colors.white.withOpacity(0.9)),
-                      ),
-                      const Text(
-                        '📶 100%',
-                        style: TextStyle(color: Colors.white70),
-                      ),
-                    ],
-                  ),
-                ),
-
-                const SizedBox(height: 40),
-                
                 // Заголовок
                 const Text(
                   'HealthMonitor IoT',
@@ -207,28 +192,16 @@ class _AuthScreenState extends State<AuthScreen> {
 
                         const SizedBox(height: 20),
                         
-                        // Биометрическая аутентификация
-                        const Text(
-                          'Или войти с помощью отпечатка пальца',
-                          style: TextStyle(
-                            color: Color(0xFF64748b),
-                            fontSize: 14,
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-
-                        IconButton(
-                          icon: const Icon(
-                            Icons.fingerprint,
-                            size: 50,
-                            color: Color(0xFF4f46e5),
-                          ),
+                        // Ссылка на регистрацию
+                        const SizedBox(height: 8),
+                        TextButton(
                           onPressed: () {
-                            // Демо-биометрия
-                            _emailController.text = 'demo@healthmonitor.com';
-                            _passwordController.text = 'demo123';
-                            _handleLogin();
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(builder: (context) => const RegistrationScreen()),
+                            );
                           },
+                          child: const Text('Зарегистрироваться'),
                         ),
 
                         const SizedBox(height: 20),
@@ -265,7 +238,7 @@ class _AuthScreenState extends State<AuthScreen> {
 
                         const SizedBox(height: 20),
                         const Text(
-                          'Нет аккаунта? Используйте демо-доступ',
+                          'Нет аккаунта? Зарегистрируйтесь',
                           style: TextStyle(
                             color: Color(0xFF64748b),
                             fontSize: 14,
@@ -276,52 +249,7 @@ class _AuthScreenState extends State<AuthScreen> {
                   ),
                 ),
 
-                const Spacer(),
 
-                // Нижняя навигация
-                Container(
-                  height: 70,
-                  decoration: const BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.only(
-                      topLeft: Radius.circular(20),
-                      topRight: Radius.circular(20),
-                    ),
-                  ),
-                  child: const Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceAround,
-                    children: [
-                      Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.lock, color: Color(0xFF4f46e5), size: 24),
-                          SizedBox(height: 4),
-                          Text(
-                            'Вход',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Color(0xFF4f46e5),
-                            ),
-                          ),
-                        ],
-                      ),
-                      Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.settings, color: Color(0xFF64748b), size: 24),
-                          SizedBox(height: 4),
-                          Text(
-                            'Настройки',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Color(0xFF64748b),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
               ],
             ),
           ),
@@ -339,46 +267,47 @@ class _AuthScreenState extends State<AuthScreen> {
     });
     
     try {
-      final dbHelper = DatabaseHelper();
-      final user = await dbHelper.getUserByEmail(_emailController.text);
-      
-      if (user == null) {
-        // Если пользователь не существует, создаем демо-пользователя
-        final newUser = User(
-          email: _emailController.text,
-          password: _passwordController.text,
-          name: 'Демо Пользователь',
-          age: 25,
+      final hive = HiveService();
+      final existing = await hive.getUserByEmail(_emailController.text);
+
+      if (existing == null) {
+        // Если пользователь не существует, создаем демо-пользователя через HiveService
+        final newUser = await hive.registerUser(
+          _emailController.text,
+          _passwordController.text,
+          'Демо Пользователь',
+          25,
         );
-        await dbHelper.insertUser(newUser);
-        
-        // Сохраняем в SharedPreferences
+
         final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('current_user_email', _emailController.text);
+        await prefs.setString('current_user_email', newUser.email);
         await prefs.setString('current_user_name', newUser.name);
-        
+
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
-            builder: (context) => MainApp(userEmail: _emailController.text),
-          ),
-        );
-      } else if (user.password == _passwordController.text) {
-        // Успешный вход
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('current_user_email', user.email);
-        await prefs.setString('current_user_name', user.name);
-        
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (context) => MainApp(userEmail: user.email),
+            builder: (context) => MainApp(userEmail: newUser.email),
           ),
         );
       } else {
-        setState(() {
-          _errorMessage = 'Неверный пароль';
-        });
+        // Аутентификация через HiveService (учтет хеширование пароля)
+        final auth = await hive.authenticateUser(_emailController.text, _passwordController.text);
+        if (auth != null) {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('current_user_email', auth.email);
+          await prefs.setString('current_user_name', auth.name);
+
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => MainApp(userEmail: auth.email),
+            ),
+          );
+        } else {
+          setState(() {
+            _errorMessage = 'Неверный пароль';
+          });
+        }
       }
     } catch (e) {
       setState(() {
@@ -430,7 +359,162 @@ class _MainAppState extends State<MainApp> {
   
   // Графики
   String _selectedMetric = 'heart_rate';
-  String _selectedPeriod = '24h';
+  String _selectedPeriod = '5m';
+
+  // BLE устройства
+  final _bleService = BleService();
+  List<dynamic> _foundDevices = [];
+  bool _isScanning = false;
+  List<BluetoothDevice> _systemConnectedDevices = [];
+  StreamSubscription? _bleScanSub;
+
+  Color _chartColorForMetric(String metric) {
+    switch (metric) {
+      case 'heart_rate':
+        return Colors.red;
+      case 'spo2':
+        return Colors.blue;
+      case 'stress':
+        return Colors.orange;
+      default:
+        return Colors.green;
+    }
+  }
+
+  DateTimeRange _getPeriodRange(String period) {
+    final now = DateTime.now();
+    switch (period) {
+      case '24h':
+        return DateTimeRange(start: now.subtract(const Duration(hours: 24)), end: now);
+      case '7d':
+        return DateTimeRange(start: now.subtract(const Duration(days: 7)), end: now);
+      case '30d':
+        return DateTimeRange(start: now.subtract(const Duration(days: 30)), end: now);
+      default:
+        return DateTimeRange(start: now.subtract(const Duration(hours: 24)), end: now);
+    }
+  }
+
+  Widget _buildLineChartFromRecords(List<HealthRecord> records, Color color) {
+    if (records.isEmpty) {
+      return Container(
+        color: Colors.white,
+        child: const Center(
+          child: Text('Нет данных для отображения', style: TextStyle(color: Colors.grey)),
+        ),
+      );
+    }
+    
+    // Сортируем по времени (возрастающе)
+    records.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+
+    if (records.isEmpty) {
+      return Container(
+        color: Colors.white,
+        child: const Center(
+          child: Text('Нет данных для отображения', style: TextStyle(color: Colors.grey)),
+        ),
+      );
+    }
+
+    final minY = records.map((r) => r.value).reduce((a, b) => a < b ? a : b);
+    final maxY = records.map((r) => r.value).reduce((a, b) => a > b ? a : b);
+    
+    // Обрабатываем случай когда все значения одинаковые
+    double actualMinY = minY;
+    double actualMaxY = maxY;
+    if (minY == maxY) {
+      actualMinY = minY - 5;
+      actualMaxY = maxY + 5;
+    }
+    
+    final paddingY = (actualMaxY - actualMinY) * 0.1;
+
+    // Нормализуем X - используем индексы вместо миллисекунд
+    final spots = <FlSpot>[];
+    for (int i = 0; i < records.length; i++) {
+      spots.add(FlSpot(i.toDouble(), records[i].value));
+    }
+
+    double leftInterval = (actualMaxY - actualMinY) / 4;
+    if (leftInterval <= 0) leftInterval = actualMaxY == 0 ? 1 : actualMaxY / 4;
+
+    return LineChart(
+      LineChartData(
+        gridData: FlGridData(
+          show: true,
+          drawVerticalLine: false,
+          horizontalInterval: leftInterval > 0 ? leftInterval : 1,
+          getDrawingHorizontalLine: (value) {
+            return FlLine(
+              color: Colors.grey.withOpacity(0.3),
+              strokeWidth: 1,
+            );
+          },
+        ),
+        titlesData: FlTitlesData(
+          show: true,
+          bottomTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: 40,
+              interval: (records.length / 4).clamp(1.0, double.infinity),
+              getTitlesWidget: (value, meta) {
+                final index = value.toInt();
+                if (index >= 0 && index < records.length) {
+                  final dt = records[index].timestamp;
+                  final totalDays = records.last.timestamp.difference(records.first.timestamp).inDays;
+                  final txt = totalDays >= 2 ? DateFormat('dd.MM').format(dt) : DateFormat('HH:mm').format(dt);
+                  return Text(txt, style: const TextStyle(fontSize: 10, color: Colors.grey));
+                }
+                return const Text('');
+              },
+            ),
+          ),
+          leftTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              interval: leftInterval > 0 ? leftInterval : 1,
+              getTitlesWidget: (value, meta) => Text(
+                value.toStringAsFixed(0),
+                style: const TextStyle(fontSize: 10, color: Colors.grey),
+              ),
+              reservedSize: 40,
+            ),
+          ),
+          topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+        ),
+        borderData: FlBorderData(show: false),
+        lineBarsData: [
+          LineChartBarData(
+            spots: spots,
+            isCurved: true,
+            color: color,
+            barWidth: 2.5,
+            isStrokeCapRound: true,
+            dotData: FlDotData(show: false),
+            belowBarData: BarAreaData(show: true, color: color.withOpacity(0.12)),
+          ),
+        ],
+        minY: (actualMinY - paddingY).clamp(0, double.infinity),
+        maxY: actualMaxY + paddingY,
+        minX: 0,
+        maxX: (records.length - 1).toDouble(),
+      ),
+    );
+  }
+
+  Widget _buildSparkline(String metric) {
+    return FutureBuilder<List<HealthRecord>>(
+      future: Future(() => HiveService().getHealthRecords(widget.userEmail, type: metric)),
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) return const SizedBox(height: 100, child: Center(child: CircularProgressIndicator()));
+        final records = snap.data ?? [];
+        return SizedBox(height: 100, child: _buildLineChartFromRecords(records.reversed.toList(), _chartColorForMetric(metric)));
+      },
+    );
+  }
   
   // Таймер для демо-данных
   Timer? _demoTimer;
@@ -443,17 +527,62 @@ class _MainAppState extends State<MainApp> {
   
   Future<void> _initApp() async {
     try {
+      await _ensureTestUserExists();  // Создаем тестового пользователя если его нет
       await _loadUserData();
+      await _loadConnectedDevices();
       _startDemoMode();
       await _loadJournalEntries();
     } catch (e) {
       print('Ошибка инициализации приложения: $e');
     }
   }
+
+  Future<bool> _ensurePermissions() async {
+    try {
+      if (Platform.isAndroid) {
+        final statuses = await [
+          Permission.bluetoothScan,
+          Permission.bluetoothConnect,
+          Permission.location,
+        ].request();
+
+        if (statuses[Permission.bluetoothScan]?.isGranted == true &&
+            statuses[Permission.bluetoothConnect]?.isGranted == true) {
+          return true;
+        }
+
+        // If location is required on older Android
+        if (statuses[Permission.location]?.isGranted == true) return true;
+
+        return false;
+      }
+      return true;
+    } catch (e) {
+      print('Ошибка запроса прав: $e');
+      return false;
+    }
+  }
+
+  Future<void> _loadConnectedDevices() async {
+    try {
+      final list = await _bleService.getConnectedDevices();
+      if (mounted) {
+        setState(() {
+          _systemConnectedDevices = list;
+        });
+      }
+    } catch (e) {
+      print('Ошибка загрузки подключённых устройств: $e');
+    }
+  }
   
   @override
   void dispose() {
     _demoTimer?.cancel();
+    _bleScanSub?.cancel();
+    _bleService.dispose();
+    _journalTitleController.dispose();
+    _journalDescriptionController.dispose();
     super.dispose();
   }
   
@@ -462,8 +591,8 @@ class _MainAppState extends State<MainApp> {
     _userName = prefs.getString('current_user_name') ?? 'Пользователь';
     
     // Загружаем пользователя из БД
-    final dbHelper = DatabaseHelper();
-    _currentUser = await dbHelper.getUserByEmail(widget.userEmail);
+    final hive = HiveService();
+    _currentUser = await hive.getUserByEmail(widget.userEmail);
     
     // Загружаем сохраненные пороги
     _hrThreshold = prefs.getInt('hr_threshold') ?? 100;
@@ -475,10 +604,111 @@ class _MainAppState extends State<MainApp> {
       setState(() {});
     }
   }
+
+  Future<void> _ensureTestUserExists() async {
+    try {
+      final hive = HiveService();
+      final testEmail = 'test@test.com';
+      final testPassword = '123456';
+      
+      // Проверяем, существует ли уже тестовый пользователь
+      var testUser = await hive.getUserByEmail(testEmail);
+      
+      if (testUser == null) {
+        // Создаем тестового пользователя
+        testUser = await hive.registerUser(
+          testEmail,
+          testPassword,
+          'Test User',
+          30,
+        );
+        print('Создан тестовый пользователь: $testEmail');
+        
+        // Заполняем БД данными на неделю и 24 часа
+        final now = DateTime.now();
+        final oneWeekAgo = now.subtract(const Duration(days: 7));
+        final oneDayAgo = now.subtract(const Duration(hours: 24));
+        
+        // Генерируем данные за неделю (по одному значению в час)
+        for (int i = 0; i < 168; i++) {
+          final timestamp = oneWeekAgo.add(Duration(hours: i));
+          
+          // Heart Rate: 60-100 bpm
+          final hr = 70.0 + (i % 20).toDouble() - 10;
+          await hive.addHealthRecord(HealthRecord(
+            id: 'hr_week_$i',
+            userId: testUser.email,
+            type: 'heart_rate',
+            value: hr,
+            timestamp: timestamp,
+          ));
+          
+          // SpO2: 95-99%
+          final spo2 = 96.0 + ((i * 3) % 8).toDouble() / 2;
+          await hive.addHealthRecord(HealthRecord(
+            id: 'spo2_week_$i',
+            userId: testUser.email,
+            type: 'spo2',
+            value: spo2,
+            timestamp: timestamp,
+          ));
+          
+          // Stress: 30-80
+          final stress = 50.0 + (i % 30).toDouble() - 15;
+          await hive.addHealthRecord(HealthRecord(
+            id: 'stress_week_$i',
+            userId: testUser.email,
+            type: 'stress',
+            value: stress,
+            timestamp: timestamp,
+          ));
+        }
+        
+        // Генерируем данные за последние 24 часа (каждые 10 минут)
+        for (int i = 0; i < 144; i++) {
+          final timestamp = oneDayAgo.add(Duration(minutes: i * 10));
+          
+          // Heart Rate: варьируем от 60 до 95
+          final hr = 72.0 + (i % 15).toDouble() - 7.5;
+          await hive.addHealthRecord(HealthRecord(
+            id: 'hr_day_$i',
+            userId: testUser.email,
+            type: 'heart_rate',
+            value: hr,
+            timestamp: timestamp,
+          ));
+          
+          // SpO2: 96-99%
+          final spo2 = 97.0 + ((i * 7) % 12).toDouble() / 4;
+          await hive.addHealthRecord(HealthRecord(
+            id: 'spo2_day_$i',
+            userId: testUser.email,
+            type: 'spo2',
+            value: spo2,
+            timestamp: timestamp,
+          ));
+          
+          // Stress: 35-75
+          final stress = 55.0 + (i % 25).toDouble() - 12.5;
+          await hive.addHealthRecord(HealthRecord(
+            id: 'stress_day_$i',
+            userId: testUser.email,
+            type: 'stress',
+            value: stress,
+            timestamp: timestamp,
+          ));
+        }
+        
+        print('Заполнена база данных тестовыми данными (неделя + 24 часа)');
+      }
+    } catch (e) {
+      print('Ошибка создания тестового пользователя: $e');
+    }
+  }
   
   void _startDemoMode() {
     if (_demoMode) {
-      _demoTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
+      _demoTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
         if (mounted) {
           _updateDemoData();
           _saveDemoDataToDatabase();
@@ -524,24 +754,27 @@ class _MainAppState extends State<MainApp> {
     if (_currentUser == null) return;
     
     try {
-      final dbHelper = DatabaseHelper();
+      final hive = HiveService();
       final now = DateTime.now();
-      
-      await dbHelper.insertHealthRecord(HealthRecord(
+
+      await hive.addHealthRecord(HealthRecord(
+        id: 'hr_${DateTime.now().millisecondsSinceEpoch}',
         userId: widget.userEmail,
         type: 'heart_rate',
         value: _heartRate,
         timestamp: now,
       ));
-      
-      await dbHelper.insertHealthRecord(HealthRecord(
+
+      await hive.addHealthRecord(HealthRecord(
+        id: 'spo2_${DateTime.now().millisecondsSinceEpoch}',
         userId: widget.userEmail,
         type: 'spo2',
         value: _spo2,
         timestamp: now,
       ));
-      
-      await dbHelper.insertHealthRecord(HealthRecord(
+
+      await hive.addHealthRecord(HealthRecord(
+        id: 'stress_${DateTime.now().millisecondsSinceEpoch}',
         userId: widget.userEmail,
         type: 'stress',
         value: _stress,
@@ -554,8 +787,8 @@ class _MainAppState extends State<MainApp> {
   
   Future<void> _loadJournalEntries() async {
     try {
-      final dbHelper = DatabaseHelper();
-      _journalEntries = await dbHelper.getJournalEntries(widget.userEmail);
+      final hive = HiveService();
+      _journalEntries = await hive.getJournalEntries(widget.userEmail);
       if (mounted) {
         setState(() {});
       }
@@ -563,13 +796,63 @@ class _MainAppState extends State<MainApp> {
       print('Ошибка загрузки журнала: $e');
     }
   }
+
+  Future<List<HealthRecord>> _fetchAggregatedRecords(String userId, String metric, String period) async {
+    final hive = HiveService();
+    final now = DateTime.now();
+
+    DateTime start;
+    if (period == '5m') {
+      start = now.subtract(const Duration(minutes: 5));
+      final records = hive.getHealthRecordsByPeriod(userId, metric, start, now);
+      return records;
+    } else if (period == '1h') {
+      start = now.subtract(const Duration(hours: 1));
+      final records = hive.getHealthRecordsByPeriod(userId, metric, start, now);
+      return records;
+    } else if (period == '24h') {
+      start = now.subtract(const Duration(hours: 24));
+      final raw = hive.getHealthRecordsByPeriod(userId, metric, start, now);
+      // aggregate per hour
+      return _aggregate(raw, Duration(hours: 1));
+    } else if (period == '7d') {
+      start = now.subtract(const Duration(days: 7));
+      final raw = hive.getHealthRecordsByPeriod(userId, metric, start, now);
+      // aggregate per day
+      return _aggregate(raw, Duration(days: 1));
+    }
+
+    return [];
+  }
+
+  List<HealthRecord> _aggregate(List<HealthRecord> raw, Duration bucket) {
+    if (raw.isEmpty) return [];
+    raw.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+
+    final buckets = <int, List<HealthRecord>>{};
+    for (var r in raw) {
+      final key = (r.timestamp.millisecondsSinceEpoch / bucket.inMilliseconds).floor();
+      buckets.putIfAbsent(key, () => []).add(r);
+    }
+
+    final result = <HealthRecord>[];
+    for (var entry in buckets.entries.toList()..sort((a, b) => a.key.compareTo(b.key))) {
+      final list = entry.value;
+      final avg = list.map((e) => e.value).reduce((a, b) => a + b) / list.length;
+      final ts = DateTime.fromMillisecondsSinceEpoch(entry.key * bucket.inMilliseconds);
+      result.add(HealthRecord(id: 'agg_${ts.millisecondsSinceEpoch}', userId: list.first.userId, type: list.first.type, value: avg, timestamp: ts));
+    }
+
+    return result;
+  }
   
   Future<void> _saveJournalEntry() async {
     if (_journalTitleController.text.isEmpty) return;
     
     try {
-      final dbHelper = DatabaseHelper();
+      final hive = HiveService();
       final entry = JournalEntry(
+        id: 'je_${DateTime.now().millisecondsSinceEpoch}',
         userId: widget.userEmail,
         type: _selectedJournalType,
         title: _journalTitleController.text,
@@ -578,7 +861,7 @@ class _MainAppState extends State<MainApp> {
         severity: _selectedSeverity,
       );
       
-      await dbHelper.insertJournalEntry(entry);
+      await hive.addJournalEntry(entry);
       
       _journalTitleController.clear();
       _journalDescriptionController.clear();
@@ -599,13 +882,118 @@ class _MainAppState extends State<MainApp> {
     }
   }
   
-  Future<void> _deleteJournalEntry(int id) async {
+  Future<void> _deleteJournalEntry(String id) async {
     try {
-      final dbHelper = DatabaseHelper();
-      await dbHelper.deleteJournalEntry(id);
+      final hive = HiveService();
+      await hive.deleteJournalEntry(id);
       await _loadJournalEntries();
     } catch (e) {
       print('Ошибка удаления записи: $e');
+    }
+  }
+
+  // ========== BLE МЕТОДЫ ==========
+  Future<void> _startBleScanning() async {
+    if (_isScanning) return;
+
+    final ok = await _ensurePermissions();
+    if (!ok) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Необходимо разрешение на Bluetooth/местоположение')));
+      return;
+    }
+
+    setState(() => _isScanning = true);
+    _foundDevices.clear();
+
+    try {
+      // Получаем уже подключенные устройства в системе
+      final connectedDevices = await _bleService.getConnectedDevices();
+      print('Найдено подключенных устройств: ${connectedDevices.length}');
+      for (var device in connectedDevices) {
+        print('Подключенное устройство: ${device.platformName ?? device.name ?? device.id.id}');
+        _foundDevices.add(device);
+      }
+      if (mounted && connectedDevices.isNotEmpty) {
+        setState(() {});
+      }
+
+      await _bleService.startScan(timeout: const Duration(seconds: 8));
+
+      await _bleScanSub?.cancel();
+      _bleScanSub = _bleService.deviceStream.listen((scanResult) {
+        final device = scanResult.device;
+        final id = device.id.id;
+
+        if (!mounted) return;
+
+        final idx = _foundDevices.indexWhere((d) {
+          if (d is ScanResult) {
+            return d.device.id.id == id;
+          } else if (d is BluetoothDevice) {
+            return d.id.id == id;
+          }
+          return false;
+        });
+        
+        if (idx >= 0) {
+          // Обновляем существующую запись (чтобы обновлять RSSI)
+          setState(() => _foundDevices[idx] = scanResult);
+        } else {
+          setState(() => _foundDevices.add(scanResult));
+        }
+      });
+    } catch (e) {
+      print('Ошибка сканирования: $e');
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Ошибка сканирования: $e')));
+    } finally {
+      if (mounted) {
+        setState(() => _isScanning = false);
+      }
+    }
+  }
+
+  Future<void> _stopBleScanning() async {
+    await _bleService.stopScan();
+    await _bleScanSub?.cancel();
+    if (mounted) setState(() => _isScanning = false);
+  }
+
+  Future<void> _connectToDevice(dynamic device) async {
+    try {
+      BluetoothDevice bd;
+      String dispName = '';
+      if (device is ScanResult) {
+        bd = device.device;
+        dispName = bd.platformName ?? bd.name ?? bd.id.id;
+      } else if (device is BluetoothDevice) {
+        bd = device;
+        dispName = bd.platformName ?? bd.name ?? bd.id.id;
+      } else {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Подключение к $dispName...')),
+      );
+      
+      final success = await _bleService.connect(bd);
+      
+      if (success && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Подключено к $dispName')),
+        );
+        setState(() => _foundDevices.clear());
+        await _stopBleScanning();
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Ошибка подключения'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      print('Ошибка подключения: $e');
     }
   }
   
@@ -619,9 +1007,13 @@ class _MainAppState extends State<MainApp> {
     
     if (value) {
       _startDemoMode();
+      // Отключаем BLE при включении демо-режима
+      await _bleService.disconnect();
     } else {
       _demoTimer?.cancel();
       _demoTimer = null;
+      // Включаем BLE при отключении демо-режима
+      _startBleScanning();
     }
   }
   
@@ -670,9 +1062,9 @@ class _MainAppState extends State<MainApp> {
         if (value > _hrThreshold) return '● Повышен';
         return '● Норма';
       case 'spo2':
-        if (value < _spo2Threshold - 2) return '● Критично';
-        if (value < _spo2Threshold) return '● Понижен';
-        return '● Норма';
+        if (value <= _spo2Threshold - 3) return '● Критично';  // <= 92
+        if (value < _spo2Threshold) return '● Понижен';        // 93-94
+        return '● Норма';  // >= 95
       case 'stress':
         if (value > _stressThreshold + 20) return '● Критично';
         if (value > _stressThreshold) return '● Повышен';
@@ -686,20 +1078,25 @@ class _MainAppState extends State<MainApp> {
     if (_currentUser == null) return;
     
     try {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Генерация PDF отчета...'),
-          duration: Duration(seconds: 2),
-        ),
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Генерация PDF отчета...'), duration: Duration(seconds: 2)));
+
+      final hive = HiveService();
+      final records = hive.getHealthRecords(widget.userEmail);
+      final journal = hive.getJournalEntries(widget.userEmail);
+      final now = DateTime.now();
+      final start = now.subtract(const Duration(days: 7));
+
+      final file = await PdfService.generateHealthReport(
+        user: _currentUser!,
+        healthRecords: records,
+        journalEntries: journal,
+        startDate: start,
+        endDate: now,
       );
-      
-      // Временно упрощаем - просто показываем сообщение
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('PDF отчет создан успешно!'),
-          duration: Duration(seconds: 3),
-        ),
-      );
+
+      // Предложить открыть и поделиться — пользователь может выбрать Telegram
+      await ShareService.shareFile(file, subject: 'Отчет о состоянии здоровья');
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Отчет создан и открыт для отправки')));
     } catch (e) {
       print('Ошибка создания отчета: $e');
       ScaffoldMessenger.of(context).showSnackBar(
@@ -727,26 +1124,6 @@ class _MainAppState extends State<MainApp> {
       backgroundColor: Colors.white,
       body: Column(
         children: [
-          // Статус бар
-          Container(
-            height: 30,
-            padding: const EdgeInsets.symmetric(horizontal: 15),
-            color: const Color(0xFFf8fafc),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  DateFormat('HH:mm').format(DateTime.now()),
-                  style: const TextStyle(color: Color(0xFF64748b)),
-                ),
-                const Text(
-                  '📶 100%',
-                  style: TextStyle(color: Color(0xFF64748b)),
-                ),
-              ],
-            ),
-          ),
-
           // Заголовок
           Container(
             height: 80,
@@ -774,37 +1151,191 @@ class _MainAppState extends State<MainApp> {
               padding: const EdgeInsets.all(16),
               child: Column(
                 children: [
-                  // Статус подключения
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFf0f9ff),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: const Color(0xFFbae6fd)),
-                    ),
-                    child: Row(
+                  // Статус подключения / Поиск BLE
+                  if (_demoMode)
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFf0f9ff),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFFbae6fd)),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.cloud,
+                            color: Colors.orange,
+                          ),
+                          const SizedBox(width: 8),
+                          const Text(
+                            'ДЕМО-РЕЖИМ АКТИВЕН',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          const Spacer(),
+                          Container(
+                            width: 10,
+                            height: 10,
+                            decoration: BoxDecoration(
+                              color: Colors.green,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  else if (_bleService.isConnected)
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFe0f5f4),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFF4db8b1)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.bluetooth_connected,
+                            color: Color(0xFF0891b2),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'ПОДКЛЮЧЕНО: ${_bleService.connectedDevice?.platformName ?? "Устройство"}',
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          const Spacer(),
+                          Container(
+                            width: 10,
+                            height: 10,
+                            decoration: const BoxDecoration(
+                              color: Color(0xFF0891b2),
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  else
+                    Column(
                       children: [
-                        Icon(
-                          _demoMode ? Icons.cloud : Icons.bluetooth,
-                          color: _demoMode ? Colors.orange : Colors.blue,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          _demoMode ? 'ДЕМО-РЕЖИМ АКТИВЕН' : 'ПОДКЛЮЧЕНО К УСТРОЙСТВУ',
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        const Spacer(),
-                        Container(
-                          width: 10,
-                          height: 10,
-                          decoration: BoxDecoration(
-                            color: _demoMode ? Colors.green : Colors.blue,
-                            shape: BoxShape.circle,
+                        ElevatedButton.icon(
+                          onPressed: _isScanning ? null : _startBleScanning,
+                          icon: const Icon(Icons.bluetooth_searching),
+                          label: Text(_isScanning ? 'Поиск...' : 'Найти BLE трекер'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF0891b2),
+                            foregroundColor: Colors.white,
+                            minimumSize: const Size(double.infinity, 45),
                           ),
                         ),
+                        if (_foundDevices.isNotEmpty) ...[
+                          const SizedBox(height: 12),
+                          FutureBuilder<List<BluetoothDevice>>(
+                            future: _bleService.getConnectedDevices(),
+                            builder: (context, connectedSnap) {
+                              // Комбинируем найденные устройства с подключенными
+                              final displayDevices = List.from(_foundDevices);
+                              if (connectedSnap.hasData) {
+                                for (var connDevice in connectedSnap.data!) {
+                                  final idx = displayDevices.indexWhere((d) {
+                                    if (d is ScanResult) return d.device.id.id == connDevice.id.id;
+                                    if (d is BluetoothDevice) return d.id.id == connDevice.id.id;
+                                    return false;
+                                  });
+                                  if (idx < 0) {
+                                    displayDevices.add(connDevice);
+                                  }
+                                }
+                              }
+                              
+                              return Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFf5f3ff),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: const Color(0xFFc4b5fd)),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      'Найденные устройства:',
+                                      style: TextStyle(fontWeight: FontWeight.bold),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    ...displayDevices.map((item) {
+                                      BluetoothDevice? dev;
+                                      ScanResult? scan;
+                                      bool isMedical = false;
+                                      
+                                      if (item is ScanResult) {
+                                        scan = item;
+                                        dev = scan.device;
+                                        isMedical = _isMedicalDevice(scan);
+                                      } else if (item is BluetoothDevice) {
+                                        dev = item;
+                                        isMedical = false;
+                                      }
+                                      
+                                      if (dev == null) return const SizedBox.shrink();
+                                      
+                                      return Padding(
+                                        padding: const EdgeInsets.only(bottom: 8),
+                                        child: GestureDetector(
+                                          onTap: () => _connectToDevice(dev!),
+                                          child: Container(
+                                            padding: const EdgeInsets.all(10),
+                                            decoration: BoxDecoration(
+                                              color: Colors.white,
+                                              borderRadius: BorderRadius.circular(6),
+                                              border: Border.all(color: const Color(0xFFc4b5fd)),
+                                            ),
+                                            child: Row(
+                                              children: [
+                                                Container(
+                                                  width: 28,
+                                                  height: 28,
+                                                  decoration: BoxDecoration(
+                                                    color: isMedical ? Colors.green : Colors.red,
+                                                    shape: BoxShape.circle,
+                                                  ),
+                                                  child: isMedical
+                                                      ? const Center(
+                                                          child: Icon(Icons.check, size: 16, color: Colors.white),
+                                                        )
+                                                      : const SizedBox.shrink(),
+                                                ),
+                                                const SizedBox(width: 8),
+                                                Expanded(
+                                                  child: Column(
+                                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                                    children: [
+                                                      Text(
+                                                        dev.platformName ?? dev.name ?? 'Unknown device',
+                                                        style: const TextStyle(fontSize: 14),
+                                                      ),
+                                                      const SizedBox(height: 4),
+                                                      Text(
+                                                        scan != null ? 'RSSI: ${scan.rssi} dBm' : 'Подключено',
+                                                        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                                const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      );
+                                    }),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                        ],
                       ],
                     ),
-                  ),
 
                   const SizedBox(height: 20),
 
@@ -837,34 +1368,25 @@ class _MainAppState extends State<MainApp> {
 
                   const SizedBox(height: 20),
 
-                  // Простой график активности
+                  // График ЧСС (спарклайн)
                   Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
                       color: const Color(0xFFf8fafc),
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: const Column(
+                    child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          'Активность за 24ч',
+                        const Text(
+                          'Пульс — последние значения',
                           style: TextStyle(
                             fontWeight: FontWeight.w600,
                             color: Color(0xFF1e293b),
                           ),
                         ),
-                        SizedBox(height: 10),
-                        SizedBox(
-                          height: 100,
-                          child: Center(
-                            child: Icon(
-                              Icons.bar_chart,
-                              size: 50,
-                              color: Color(0xFF4f46e5),
-                            ),
-                          ),
-                        ),
+                        const SizedBox(height: 10),
+                        _buildSparkline('heart_rate'),
                       ],
                     ),
                   ),
@@ -895,6 +1417,90 @@ class _MainAppState extends State<MainApp> {
 
       bottomNavigationBar: _buildBottomNavigationBar(),
     );
+  }
+  
+  /// Проверяет, является ли устройство медицинским на основе UUIDs и других характеристик
+  bool _isMedicalDevice(ScanResult scanResult) {
+    final adv = scanResult.advertisementData;
+    
+    // Медицинские UUIDs для здравоохранения
+    final medicalServiceUuids = [
+      '180d', // Heart Rate Service
+      '180a', // Device Information Service
+      '181f', // Health Thermometer Service
+      '1823', // Pulse Oximeter Service
+      '180e', // Battery Service (часто используется с медицинскими)
+    ];
+    
+    // Проверяем Service UUIDs
+    if (adv?.serviceUuids != null && adv!.serviceUuids!.isNotEmpty) {
+      for (var uuid in adv.serviceUuids!) {
+        final uuidLower = uuid.toString().toLowerCase();
+        if (medicalServiceUuids.any((medUuid) => uuidLower.contains(medUuid))) {
+          return true;
+        }
+      }
+    }
+    
+    // Проверяем характеристики в названии (медицинские устройства часто содержат такие слова)
+    final deviceName = (scanResult.device.platformName ?? 
+                        scanResult.device.name ?? 
+                        '').toLowerCase();
+    
+    // Слова, которые указывают на медицинские устройства
+    final medicalKeywords = [
+      'health',
+      'heart',
+      'pulse', 
+      'oximeter',
+      'spo2',
+      'ecg',
+      'bp',
+      'blood pressure',
+      'monitor',
+      'medical',
+      'tracker',
+      'band',
+      'watch',
+    ];
+    
+    // Слова, указывающие на немедицинские устройства (наушники, динамики и т.д.)
+    final nonMedicalKeywords = [
+      'headphone',
+      'earphone',
+      'earbuds',
+      'speaker',
+      'audio',
+      'wireless',
+      'keyboard',
+      'mouse',
+      'tablet',
+      'phone',
+      'camera',
+    ];
+    
+    // Если это явно немедицинское устройство, отмечаем как non-medical
+    for (var keyword in nonMedicalKeywords) {
+      if (deviceName.contains(keyword)) {
+        return false;
+      }
+    }
+    
+    // Если это явно медицинское устройство, отмечаем как medical
+    for (var keyword in medicalKeywords) {
+      if (deviceName.contains(keyword)) {
+        return true;
+      }
+    }
+    
+    // Если есть Manufacturer Data, это обычно BLE устройство
+    if (adv?.manufacturerData != null && adv!.manufacturerData!.isNotEmpty) {
+      // Но если мы не знаем, что это медицинское, считаем его немедицинским
+      return false;
+    }
+    
+    // По умолчанию: если устройство имеет какую-то информацию, но мы не знаем, что это медицинское, считаем его немедицинским
+    return false;
   }
   
   Widget _buildMetricCard(String title, String value, IconData icon, Color statusColor, String status) {
@@ -946,26 +1552,6 @@ class _MainAppState extends State<MainApp> {
       backgroundColor: Colors.white,
       body: Column(
         children: [
-          // Статус бар
-          Container(
-            height: 30,
-            padding: const EdgeInsets.symmetric(horizontal: 15),
-            color: const Color(0xFFf8fafc),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  DateFormat('HH:mm').format(DateTime.now()),
-                  style: const TextStyle(color: Color(0xFF64748b)),
-                ),
-                const Text(
-                  '📶 100%',
-                  style: TextStyle(color: Color(0xFF64748b)),
-                ),
-              ],
-            ),
-          ),
-
           // Заголовок
           Container(
             height: 80,
@@ -1045,18 +1631,10 @@ class _MainAppState extends State<MainApp> {
                   DropdownButtonFormField<String>(
                     value: _selectedPeriod,
                     items: const [
-                      DropdownMenuItem(
-                        value: '24h',
-                        child: Text('24 часа'),
-                      ),
-                      DropdownMenuItem(
-                        value: '7d',
-                        child: Text('7 дней'),
-                      ),
-                      DropdownMenuItem(
-                        value: '30d',
-                        child: Text('30 дней'),
-                      ),
+                      DropdownMenuItem(value: '5m', child: Text('5 минут')),
+                      DropdownMenuItem(value: '1h', child: Text('1 час')),
+                      DropdownMenuItem(value: '24h', child: Text('24 часа (по часам)')),
+                      DropdownMenuItem(value: '7d', child: Text('7 дней (по дням)')),
                     ],
                     onChanged: (value) {
                       setState(() => _selectedPeriod = value!);
@@ -1071,75 +1649,83 @@ class _MainAppState extends State<MainApp> {
 
                   const SizedBox(height: 20),
 
-                  // Простой график
-                  Container(
-                    height: 200,
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFf8fafc),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.blue),
-                    ),
-                    child: const Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            Icons.insights,
-                            size: 50,
-                            color: Color(0xFF4f46e5),
-                          ),
-                          SizedBox(height: 10),
-                          Text(
-                            'График данных',
-                            style: TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          Text(
-                            'В реальном приложении здесь будет интерактивный график',
-                            style: TextStyle(fontSize: 12, color: Colors.grey),
-                            textAlign: TextAlign.center,
-                          ),
-                        ],
-                      ),
-                    ),
+                  // Интерактивный график по выбранному показателю
+                  FutureBuilder<List<HealthRecord>>(
+                    key: ValueKey('$_selectedMetric-$_selectedPeriod'),
+                    future: _fetchAggregatedRecords(widget.userEmail, _selectedMetric, _selectedPeriod),
+                    builder: (context, snap) {
+                      if (snap.connectionState == ConnectionState.waiting) return SizedBox(height: 200, child: Center(child: CircularProgressIndicator()));
+                      final records = snap.data ?? [];
+                      return Container(
+                        height: 240,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFf8fafc),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.blue),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'График: ${_selectedMetric == 'heart_rate' ? 'Пульс' : _selectedMetric == 'spo2' ? 'SpO₂' : 'Стресс'}',
+                              style: const TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            const SizedBox(height: 8),
+                            Expanded(child: _buildLineChartFromRecords(records, _chartColorForMetric(_selectedMetric))),
+                          ],
+                        ),
+                      );
+                    },
                   ),
 
                   const SizedBox(height: 20),
 
-                  // Статистика
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFf0f9ff),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Row(
+                  // Статистика за выбранный период (использует HiveService)
+                  FutureBuilder<Map<String, dynamic>>(
+                    key: ValueKey('stats-$_selectedMetric-$_selectedPeriod'),
+                    future: Future(() {
+                      final range = _getPeriodRange(_selectedPeriod);
+                      return HiveService().getHealthStatistics(widget.userEmail, _selectedMetric, range.start, range.end);
+                    }),
+                    builder: (context, snap) {
+                      if (snap.connectionState == ConnectionState.waiting) return SizedBox(height: 120, child: Center(child: CircularProgressIndicator()));
+                      final stats = snap.data ?? {'min': 0, 'max': 0, 'avg': 0};
+                      return Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFf0f9ff),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Icon(Icons.bar_chart, color: Color(0xFF0369a1)),
-                            SizedBox(width: 8),
-                            Text(
-                              'Статистика за период',
-                              style: TextStyle(
-                                fontWeight: FontWeight.w600,
-                                color: Color(0xFF0369a1),
-                              ),
+                            const Row(
+                              children: [
+                                Icon(Icons.bar_chart, color: Color(0xFF0369a1)),
+                                SizedBox(width: 8),
+                                Text(
+                                  'Статистика за период',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF0369a1),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 16),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                _buildStatItem('Мин.', (stats['min'] ?? 0).toStringAsFixed(1)),
+                                _buildStatItem('Макс.', (stats['max'] ?? 0).toStringAsFixed(1)),
+                                _buildStatItem('Средн.', (stats['avg'] ?? 0).toStringAsFixed(1)),
+                              ],
                             ),
                           ],
                         ),
-                        const SizedBox(height: 16),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            _buildStatItem('Мин.', '60'),
-                            _buildStatItem('Макс.', '120'),
-                            _buildStatItem('Средн.', '78'),
-                          ],
-                        ),
-                      ],
-                    ),
+                      );
+                    },
                   ),
                 ],
               ),
@@ -1179,26 +1765,6 @@ class _MainAppState extends State<MainApp> {
       backgroundColor: Colors.white,
       body: Column(
         children: [
-          // Статус бар
-          Container(
-            height: 30,
-            padding: const EdgeInsets.symmetric(horizontal: 15),
-            color: const Color(0xFFf8fafc),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  DateFormat('HH:mm').format(DateTime.now()),
-                  style: const TextStyle(color: Color(0xFF64748b)),
-                ),
-                const Text(
-                  '📶 100%',
-                  style: TextStyle(color: Color(0xFF64748b)),
-                ),
-              ],
-            ),
-          ),
-
           // Заголовок
           Container(
             height: 80,
@@ -1227,6 +1793,64 @@ class _MainAppState extends State<MainApp> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  if (_systemConnectedDevices.isNotEmpty) ...[
+                    const Text(
+                      'Системно подключённые устройства',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF1e293b),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    ..._systemConnectedDevices.map((dev) {
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: GestureDetector(
+                          onTap: () => _connectToDevice(dev),
+                          child: Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: const Color(0xFFe5e7eb)),
+                            ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFEFF6FF),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: const Icon(Icons.devices, size: 20, color: Color(0xFF0369a1)),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        dev.platformName ?? dev.name ?? dev.id.id,
+                                        style: const TextStyle(fontWeight: FontWeight.w600),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        'Системное подключение — нажмите, чтобы подключиться в приложении',
+                                        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey),
+                              ],
+                            ),
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                    const SizedBox(height: 16),
+                  ],
                   const Text(
                     'Новая запись',
                     style: TextStyle(
@@ -1431,11 +2055,7 @@ class _MainAppState extends State<MainApp> {
         ),
         trailing: IconButton(
           icon: const Icon(Icons.delete, color: Colors.red),
-          onPressed: () {
-            if (entry.id != null) {
-              _deleteJournalEntry(entry.id!);
-            }
-          },
+          onPressed: () => _deleteJournalEntry(entry.id),
         ),
       ),
     );
@@ -1446,26 +2066,6 @@ class _MainAppState extends State<MainApp> {
       backgroundColor: Colors.white,
       body: Column(
         children: [
-          // Статус бар
-          Container(
-            height: 30,
-            padding: const EdgeInsets.symmetric(horizontal: 15),
-            color: const Color(0xFFf8fafc),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  DateFormat('HH:mm').format(DateTime.now()),
-                  style: const TextStyle(color: Color(0xFF64748b)),
-                ),
-                const Text(
-                  '📶 100%',
-                  style: TextStyle(color: Color(0xFF64748b)),
-                ),
-              ],
-            ),
-          ),
-
           // Заголовок
           Container(
             height: 80,
@@ -1596,11 +2196,11 @@ class _MainAppState extends State<MainApp> {
                           value: _demoMode,
                           onChanged: _toggleDemoMode,
                         ),
-                        if (_demoMode)
+                          if (_demoMode)
                           const Padding(
                             padding: EdgeInsets.only(left: 16, top: 8),
                             child: Text(
-                              'Данные генерируются каждые 3 секунды',
+                              'Данные генерируются каждые 2 секунды',
                               style: TextStyle(color: Colors.grey, fontSize: 12),
                             ),
                           ),
@@ -1745,27 +2345,6 @@ class _MainAppState extends State<MainApp> {
                           ),
                         ),
                         const SizedBox(height: 10),
-                        ElevatedButton.icon(
-                          onPressed: () {
-                            // Отправка данных врачу (демо)
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Данные успешно отправлены врачу'),
-                                duration: Duration(seconds: 2),
-                              ),
-                            );
-                          },
-                          icon: const Icon(Icons.share),
-                          label: const Text('Поделиться с врачом'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF10b981),
-                            foregroundColor: Colors.white,
-                            minimumSize: const Size(double.infinity, 50),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                          ),
-                        ),
                       ],
                     ),
                   ),
@@ -1806,8 +2385,8 @@ class _MainAppState extends State<MainApp> {
       unselectedItemColor: const Color(0xFF64748b),
       items: const [
         BottomNavigationBarItem(
-          icon: Icon(Icons.dashboard),
-          label: 'Дашборд',
+          icon: Icon(Icons.bluetooth),
+          label: 'Устройства',
         ),
         BottomNavigationBarItem(
           icon: Icon(Icons.favorite),
@@ -1829,57 +2408,433 @@ class _MainAppState extends State<MainApp> {
     );
   }
   
-  Widget _buildDashboardScreen() {
+  Widget _buildDevicesScreen() {
     return Scaffold(
       backgroundColor: Colors.white,
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(
-              Icons.dashboard,
-              size: 80,
-              color: Color(0xFF4f46e5),
+      body: Column(
+        children: [
+          // Заголовок
+          Container(
+            height: 80,
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFF4f46e5), Color(0xFF7c3aed)],
+              ),
             ),
-            const SizedBox(height: 20),
-            const Text(
-              'Общий дашборд',
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+            child: const Center(
+              child: Text(
+                'BLE Устройства',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white,
+                ),
+              ),
             ),
-            const SizedBox(height: 10),
-            const Text(
-              'Здесь будет сводная информация',
-              style: TextStyle(color: Colors.grey),
+          ),
+
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Статус подключения
+                  if (_bleService.isConnected)
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFe0f5f4),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFF0891b2), width: 2),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(Icons.bluetooth_connected, color: Color(0xFF0891b2), size: 28),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      'Подключено',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 16,
+                                        color: Color(0xFF0891b2),
+                                      ),
+                                    ),
+                                    Text(
+                                      _bleService.connectedDevice?.platformName ?? 'Устройство',
+                                      style: const TextStyle(
+                                        color: Color(0xFF0f766e),
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              ElevatedButton(
+                                onPressed: () async {
+                                  await _bleService.disconnect();
+                                  setState(() {});
+                                },
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.red,
+                                  foregroundColor: Colors.white,
+                                ),
+                                child: const Text('Отключить'),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    )
+                  else
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Поиск устройств',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF1e293b),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        ElevatedButton.icon(
+                          onPressed: _isScanning ? null : () async {
+                            await _startBleScanning();
+                            setState(() {});
+                          },
+                          icon: Icon(_isScanning ? Icons.hourglass_bottom : Icons.bluetooth_searching),
+                          label: Text(_isScanning ? 'Поиск...' : 'Начать поиск'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF0891b2),
+                            foregroundColor: Colors.white,
+                            minimumSize: const Size(double.infinity, 50),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                          ),
+                        ),
+                        if (_isScanning)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 12),
+                            child: Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFEF3C7),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: const Color(0xFFFCD34D)),
+                              ),
+                              child: const Row(
+                                children: [
+                                  SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      valueColor: AlwaysStoppedAnimation(Color(0xFFDC2626)),
+                                    ),
+                                  ),
+                                  SizedBox(width: 12),
+                                  Text('Сканирование... Ожидайте 8 секунд'),
+                                ],
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  
+                  const SizedBox(height: 24),
+
+                  // Подключённые устройства (системные + подключённые приложением)
+                  Builder(builder: (context) {
+                    final combined = <BluetoothDevice>[];
+                    combined.addAll(_systemConnectedDevices);
+                    if (_bleService.connectedDevice != null && !combined.any((d) => d.id.id == _bleService.connectedDevice!.id.id)) {
+                      combined.insert(0, _bleService.connectedDevice!);
+                    }
+
+                    if (combined.isEmpty) {
+                      return Container(
+                        padding: const EdgeInsets.all(24),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF3F4F6),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Icon(Icons.bluetooth_disabled, size: 48, color: Colors.grey[400]),
+                            const SizedBox(height: 12),
+                            const Text(
+                              'Нет подключённых Bluetooth устройств',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFF4b5563),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Нажмите "Начать поиск" чтобы подключить устройство',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: Colors.grey[600],
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }
+
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Подключённых устройств: ${combined.length}',
+                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF1e293b)),
+                        ),
+                        const SizedBox(height: 12),
+                        ...combined.map((dev) {
+                          final isAppConnected = _bleService.connectedDevice?.id.id == dev.id.id;
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: Container(
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: const Color(0xFFe5e7eb), width: 2),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.05),
+                                    blurRadius: 8,
+                                    offset: const Offset(0, 2),
+                                  ),
+                                ],
+                              ),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFEFF6FF),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Icon(Icons.bluetooth_connected, size: 24, color: Color(0xFF0369a1)),
+                                  ),
+                                  const SizedBox(width: 16),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          dev.platformName ?? dev.name ?? dev.id.id,
+                                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16, color: Color(0xFF1e293b)),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          isAppConnected ? 'Подключено в приложении' : 'Подключено в системе',
+                                          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  if (isAppConnected)
+                                    ElevatedButton(
+                                      onPressed: () async {
+                                        await _bleService.disconnect();
+                                        await _loadConnectedDevices();
+                                        setState(() {});
+                                      },
+                                      style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+                                      child: const Text('Отключить'),
+                                    )
+                                  else
+                                    ElevatedButton(
+                                      onPressed: () async {
+                                        await _connectToDevice(dev);
+                                        await _loadConnectedDevices();
+                                        setState(() {});
+                                      },
+                                      child: const Text('Подключиться'),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                      ],
+                    );
+                  }),
+
+                  const SizedBox(height: 24),
+
+                  // Справка
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFEF3C7),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFFFCD34D)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Row(
+                          children: [
+                            Icon(Icons.info, color: Color(0xFFD97706), size: 20),
+                            SizedBox(width: 8),
+                            Text(
+                              'О подключении',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFFD97706),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          '• Включите Bluetooth на вашем устройстве\n'
+                          '• Убедитесь, что трекер включен и находится рядом\n'
+                          '• Приложение поддерживает устройства с датчиками пульса, SpO₂ и стресса\n'
+                          '• После подключения данные автоматически синхронизируются',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey[700],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
-            const SizedBox(height: 30),
-            ElevatedButton(
-              onPressed: () {
-                setState(() => _selectedIndex = 1);
-              },
-              child: const Text('Перейти к моим показателям'),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
+
       bottomNavigationBar: _buildBottomNavigationBar(),
     );
   }
   
+
   Widget _buildCurrentScreen() {
     switch (_selectedIndex) {
-      case 0: return _buildDashboardScreen();
+      case 0: return _buildDevicesScreen();
       case 1: return _buildHealthDashboard();
       case 2: return _buildAnalyticsScreen();
       case 3: return _buildJournalScreen();
       case 4: return _buildSettingsScreen();
-      default: return _buildHealthDashboard();
+      default: return _buildDevicesScreen();
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    return _buildCurrentScreen();
+  }
+
+}
+
+class RegistrationScreen extends StatefulWidget {
+  const RegistrationScreen({super.key});
+
+  @override
+  State<RegistrationScreen> createState() => _RegistrationScreenState();
+}
+
+class _RegistrationScreenState extends State<RegistrationScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+  final _nameController = TextEditingController();
+  final _ageController = TextEditingController();
+  bool _isLoading = false;
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
-      body: _buildCurrentScreen(),
+      appBar: AppBar(title: const Text('Регистрация')),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            children: [
+              TextFormField(
+                controller: _nameController,
+                decoration: const InputDecoration(labelText: 'Name'),
+                validator: (v) => (v == null || v.isEmpty) ? 'Enter name' : null,
+              ),
+              const SizedBox(height: 8),
+              TextFormField(
+                controller: _ageController,
+                decoration: const InputDecoration(labelText: 'Age'),
+                keyboardType: TextInputType.number,
+              ),
+              const SizedBox(height: 8),
+              TextFormField(
+                controller: _emailController,
+                decoration: const InputDecoration(labelText: 'Email'),
+                validator: (v) => (v == null || !v.contains('@')) ? 'Enter valid email' : null,
+              ),
+              const SizedBox(height: 8),
+              TextFormField(
+                controller: _passwordController,
+                decoration: const InputDecoration(labelText: 'Password'),
+                obscureText: true,
+                validator: (v) => (v == null || v.length < 6) ? 'Min 6 chars' : null,
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: _isLoading ? null : _register,
+                child: _isLoading ? const CircularProgressIndicator() : const Text('Register'),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
+
+  Future<void> _register() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _isLoading = true);
+    try {
+      final hive = HiveService();
+      final user = await hive.registerUser(
+        _emailController.text,
+        _passwordController.text,
+        _nameController.text.isEmpty ? 'User' : _nameController.text,
+        int.tryParse(_ageController.text) ?? 30,
+      );
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('current_user_email', user.email);
+      await prefs.setString('current_user_name', user.name);
+
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (context) => MainApp(userEmail: user.email)),
+        (_) => false,
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
 }
+

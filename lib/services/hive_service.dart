@@ -44,8 +44,113 @@ class HiveService {
       createdAt: DateTime.now(),
     );
     await _usersBox.put(demoUser.id, demoUser);
+    
+    // Populate demo history for the demo user (use email as userId)
+    await _populateDemoHistory(demoUser.email);
   }
   
+
+  Future<void> _populateDemoHistory(String userId) async {
+    final now = DateTime.now();
+
+    // Weekly data: hourly points for last 7 days (24 * 7 = 168)
+    for (int d = 0; d < 7; d++) {
+      for (int h = 0; h < 24; h++) {
+        final ts = DateTime(now.year, now.month, now.day).subtract(Duration(days: d)).add(Duration(hours: h));
+        final hr = 60 + (10 * (0.5 + (h % 6) / 6)) + (d % 3) * 2; // synthetic pattern
+        final spo2 = 96 + ((h % 5) - 2) * 0.2;
+        final stress = 30 + (h % 10) * 2 + (d % 4);
+
+        await addHealthRecord(HealthRecord(
+          id: 'hr_${ts.millisecondsSinceEpoch}',
+          userId: userId,
+          type: 'heart_rate',
+          value: hr.toDouble(),
+          timestamp: ts,
+        ));
+
+        await addHealthRecord(HealthRecord(
+          id: 'spo2_${ts.millisecondsSinceEpoch}',
+          userId: userId,
+          type: 'spo2',
+          value: double.parse(spo2.toStringAsFixed(1)),
+          timestamp: ts,
+        ));
+
+        await addHealthRecord(HealthRecord(
+          id: 'stress_${ts.millisecondsSinceEpoch}',
+          userId: userId,
+          type: 'stress',
+          value: stress.toDouble(),
+          timestamp: ts,
+        ));
+      }
+    }
+
+    // Recent 1 hour: per-minute values
+    for (int m = 60; m >= 0; m--) {
+      final ts = now.subtract(Duration(minutes: m));
+      final hr = 70 + (m % 20) - 10 + (now.hour % 3);
+      final spo2 = 97.0 + ((m % 6) - 3) * 0.05;
+      final stress = 40 + (m % 25);
+
+      await addHealthRecord(HealthRecord(
+        id: 'hr_m_${ts.millisecondsSinceEpoch}',
+        userId: userId,
+        type: 'heart_rate',
+        value: hr.toDouble(),
+        timestamp: ts,
+      ));
+
+      await addHealthRecord(HealthRecord(
+        id: 'spo2_m_${ts.millisecondsSinceEpoch}',
+        userId: userId,
+        type: 'spo2',
+        value: double.parse(spo2.toStringAsFixed(1)),
+        timestamp: ts,
+      ));
+
+      await addHealthRecord(HealthRecord(
+        id: 'stress_m_${ts.millisecondsSinceEpoch}',
+        userId: userId,
+        type: 'stress',
+        value: stress.toDouble(),
+        timestamp: ts,
+      ));
+    }
+
+    // Recent 5 minutes: per-10-seconds values
+    for (int s = 300; s >= 0; s -= 10) {
+      final ts = now.subtract(Duration(seconds: s));
+      final hr = 75 + ((s / 10) % 8) - 4;
+      final spo2 = 97.5 + ((s / 10) % 3) * 0.1;
+      final stress = 45 + ((s / 10) % 6);
+
+      await addHealthRecord(HealthRecord(
+        id: 'hr_s_${ts.millisecondsSinceEpoch}',
+        userId: userId,
+        type: 'heart_rate',
+        value: hr.toDouble(),
+        timestamp: ts,
+      ));
+
+      await addHealthRecord(HealthRecord(
+        id: 'spo2_s_${ts.millisecondsSinceEpoch}',
+        userId: userId,
+        type: 'spo2',
+        value: double.parse(spo2.toStringAsFixed(1)),
+        timestamp: ts,
+      ));
+
+      await addHealthRecord(HealthRecord(
+        id: 'stress_s_${ts.millisecondsSinceEpoch}',
+        userId: userId,
+        type: 'stress',
+        value: stress.toDouble(),
+        timestamp: ts,
+      ));
+    }
+  }
   String _hashPassword(String password) {
     final bytes = utf8.encode(password);
     final digest = sha256.convert(bytes);
