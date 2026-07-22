@@ -1,16 +1,44 @@
-# health_monitor_final
+📱 MobileApp-IoMT — Мониторинг здоровья через BLE
+Приложение для сбора и отображения данных с носимых устройств (пульсометров, фитнес-браслетов) через Bluetooth Low Energy (BLE). Проект разработан в рамках изучения Интернета вещей для здравоохранения (IoMT).
 
-A new Flutter project.
+🚀 Возможности
+Поиск и подключение к BLE-устройствам
 
-## Getting Started
+Получение данных о пульсе, шагах и других показателях в реальном времени
 
-This project is a starting point for a Flutter application.
+Визуализация данных в виде графиков
 
-A few resources to get you started if this is your first Flutter project:
+Эмуляция BLE-устройства для тестирования (Python-скрипт)
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+🛠️ Стек технологий
+Компонент	Технология
+Мобильное приложение	Flutter (Dart)
+Эмуляция BLE	Python (ble_tracker_emulator.py)
+Платформы	Android / iOS
+📦 Запуск проекта
+1. Клонируй репозиторий
+bash
+git clone https://github.com/RazorDuraley/MobileApp-IoMT.git
+cd MobileApp-IoMT
+2. Запусти эмулятор BLE (опционально)
+Для тестирования без реального устройства:
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+bash
+python ble_tracker_emulator.py
+3. Запусти мобильное приложение
+bash
+flutter pub get
+flutter run
+🧠 Что внутри?
+lib/ — основной код приложения на Dart
+
+android/ и ios/ — нативные платформенные модули
+
+ble_tracker_emulator.py — скрипт для эмуляции BLE-устройства
+
+BLE_EMULATOR_README.md — инструкция по эмулятору
+
+📌 Примечания
+Для работы с реальными BLE-устройствами требуется разрешение на доступ к Bluetooth.
+
+Проект носит учебный характер, но может быть доработан до промышленного прототипа.
